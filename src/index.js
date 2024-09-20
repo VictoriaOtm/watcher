@@ -2,17 +2,18 @@ import keyBy from 'lodash/keyBy.js';
 import './styles.scss';
 import 'bootstrap';
 import * as yup from 'yup';
-import onChange from 'on-change';
 import i18n from 'i18next';
 import axios from 'axios';
 import { v4 as uuidv4 } from 'uuid';
+import watch from './watcher.js';
 import resources from './locales.js';
 import {
-  renderRssLists, appendText, renderErrors, clearErrors, renderingTextModal,
+  appendText,
 } from './view.js';
 
 const app = async () => {
   const i18nextInstance = i18n.createInstance();
+  // заменить все селекторы на id
   const elements = {
     modalTitle: document.querySelector('.modal-title'),
     modalBody: document.querySelector('.modal-body'),
@@ -61,28 +62,8 @@ const app = async () => {
     },
   };
 
-  const watchedState = onChange(state, (path, value) => {
-    if (path === 'rssForm.isValid') {
-      if (value === false) {
-        renderErrors(state.rssForm.errors, i18nextInstance);
-      } else {
-        clearErrors(i18nextInstance);
-      }
-    }
-    if (path === 'rssForm.errors') {
-      renderErrors(state.rssForm.errors, i18nextInstance);
-    }
-    if (path === 'rssForm.data.activeRssUrlsData') {
-      if (value.length !== 0) {
-        renderRssLists(value, state, i18nextInstance);
-      }
-    }
-    if (path === 'rssForm.data.clickedListElements') {
-      const currClickId = state.rssForm.data.currentClickedListElement;
-      const fD = state.rssForm.data.activeRssUrlsData.filter((i) => i.itemsId === currClickId);
-      renderingTextModal(fD[0], value, elements);
-    }
-  });
+  const watchedState = watch(state, elements, i18nextInstance);
+  // вот тут делать инит модулей, где будут уже eventListener'ы, туда и прокинем watchedState
 
   return {
     state, i18nextInstance, elements, watchedState,
@@ -93,6 +74,7 @@ const {
   state, i18nextInstance, elements, watchedState,
 } = await app();
 
+// все что ниже разнести по модулям
 const showNetworkError = () => {
   const error = new Error('Network error!');
   error.type = 'networkError';
