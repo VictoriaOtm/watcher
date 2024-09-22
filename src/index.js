@@ -1,15 +1,12 @@
-import keyBy from 'lodash/keyBy.js';
 import './styles.scss';
 import 'bootstrap';
-import * as yup from 'yup';
 import i18n from 'i18next';
-import axios from 'axios';
-import { v4 as uuidv4 } from 'uuid';
 import watch from './watcher.js';
 import resources from './locales.js';
 import {
   appendText,
 } from './view.js';
+import AddRssForm from './components/addRss/controller.js';
 
 const app = async () => {
   const i18nextInstance = i18n.createInstance();
@@ -41,8 +38,11 @@ const app = async () => {
 
   appendText(elements, i18nextInstance);
 
+  // это наша полная модель
   const state = {
     currentLocale: 'ru',
+    feed: [],
+    posts: [],
     rssForm: {
       stateForm: 'filling',
       isValid: false,
@@ -65,13 +65,16 @@ const app = async () => {
   const watchedState = watch(state, elements, i18nextInstance);
   // вот тут делать инит модулей, где будут уже eventListener'ы, туда и прокинем watchedState
 
+  const addRssForm = new AddRssForm(watchedState, elements, i18nextInstance);
+  addRssForm.init();
+
   return {
     state, i18nextInstance, elements, watchedState,
   };
 };
 
 const {
-  state, i18nextInstance, elements, watchedState,
+  elements, watchedState,
 } = await app();
 
 // все что ниже разнести по модулям
@@ -86,199 +89,12 @@ const hiddeNetworkError = () => {
   watchedState.rssForm.isValid = true;
 };
 
-const getUrlWithProxy = (url) => {
-  const urlWithProxy = new URL('/get', 'https://allorigins.hexlet.app/');
-  urlWithProxy.searchParams.set('disableCache', 'true');
-  urlWithProxy.searchParams.set('url', url);
-  return urlWithProxy.toString();
-};
-
-let isOnline = true;
-
-const checkInternetConnection = () => {
-  axios.get(getUrlWithProxy(watchedState.rssForm.data.fields.activeUrl))
-    .then(() => {
-      if (!isOnline) {
-        isOnline = true;
-        hiddeNetworkError();
-      }
-    })
-    .catch(() => {
-      if (isOnline) {
-        isOnline = false;
-        showNetworkError();
-      }
-    });
-};
-
-function repeatCheck() {
-  checkInternetConnection();
-  setTimeout(repeatCheck, 1000);
-}
-
-const dataParser = (data) => {
-  const parser = new DOMParser();
-  const feedData = parser.parseFromString(data, 'text/xml');
-  const parseerrors = feedData.querySelector('parsererror');
-  if (parseerrors !== null) {
-    const error = parseerrors.textContent;
-    throw new Error(error);
-  }
-};
-
-// Get RSS stream
-const getRSS = async (url) => {
-  try {
-    if (state.rssForm.isValid) {
-      const response = await axios.get(getUrlWithProxy(url));
-      dataParser(response.data.contents);
-      const parser = new DOMParser();
-      const xmlDoc = parser.parseFromString(response.data.contents, 'application/xml');
-      const mainTitle = xmlDoc.querySelectorAll('title')[0].textContent; // +
-      const mainDescription = xmlDoc.querySelectorAll('description')[0].textContent; // +
-      const items = xmlDoc.querySelectorAll('item');
-      const rssData = [];
-      let itemsId = uuidv4();
-      rssData.push({ itemsId, mainTitle });
-      itemsId = uuidv4();
-      rssData.push({ itemsId, mainDescription });
-      itemsId = uuidv4();
-      items.forEach((item) => {
-        const title = item.querySelector('title').textContent;
-        const description = item.querySelector('description').textContent;
-        const link = item.querySelector('link').textContent;
-        rssData.push({
-          itemsId, title, description, link,
-        });
-        itemsId = uuidv4();
-      });
-      return rssData;
-    }
-    return false;
-  } catch (error) {
-    if (error.message === 'Network Error') {
-      watchedState.rssForm.errors = error;
-      watchedState.rssForm.isValid = false;
-    }
-    return false;
-  }
-};
-
-// Проверяю каждый RSS-поток
-function checkEvenRssStream() {
-  const allRssStreams = watchedState.rssForm.data.rssUrls;
-  allRssStreams.forEach((RssStream) => {
-    getRSS(RssStream)
-      .then((d) => {
-        if (d) {
-          const titles = watchedState.rssForm.data.activeRssUrlsData.map((item) => item.title);
-          const desc = watchedState.rssForm.data.activeRssUrlsData.map((item) => item.description);
-          const filt = d.filter((i) => !titles.includes(i.title) && !desc.includes(i.description));
-          if (filt.length > 0) {
-            watchedState.rssForm.data.activeRssUrlsData = [
-              ...watchedState.rssForm.data.activeRssUrlsData,
-              ...filt,
-            ];
-          }
-        }
-      })
-      .catch((error) => {
-        if (error.message === 'Network Error') {
-          watchedState.rssForm.errors = error;
-          watchedState.rssForm.isValid = false;
-        }
-      });
-  });
-}
-
-function repeat() {
-  checkEvenRssStream();
-  setTimeout(repeat, 5000);
-}
-
-const isRSSUrl = (rawData) => {
-  const parser = new DOMParser();
-  const xmlDoc = parser.parseFromString(rawData.data.contents, 'application/xml');
-  if (xmlDoc.getElementsByTagName('rss').length > 0) {
-    return xmlDoc;
-  }
-  const error = new Error();
-  error.type = 'noRSS';
-  throw error;
-};
-
-const createSchema = (rssUrls) => yup.object().shape({
-  activeUrl: yup
-    .string()
-    .url(i18nextInstance.t('invalidUrl'))
-    .required()
-    .notOneOf(rssUrls, `${i18nextInstance.t('notOneOf')}`),
-});
-
-const validate = async (fields, rssUrls) => {
-  const schema = createSchema(rssUrls);
-  try {
-    await schema.validate(fields, { abortEarly: false });
-    return {};
-  } catch (e) {
-    const errors = keyBy(e.inner, 'path');
-    throw errors;
-  }
-};
-
-const handler = async () => {
-  const { urlInput } = elements;
-  const { value, name } = urlInput;
-  watchedState.rssForm.data.fields.activeUrl = value;
-  watchedState.rssForm.data.touchedFields[name] = true;
-  validate(watchedState.rssForm.data.fields, watchedState.rssForm.data.rssUrls)
-    .then(async (data0) => {
-      if (!Object.keys(data0).length === 0) {
-        throw data0;
-      }
-      const response = await axios.get(getUrlWithProxy(watchedState.rssForm.data.fields.activeUrl));
-      return response;
-    })
-    .then(async (data1) => {
-      const result = isRSSUrl(data1);
-      return result;
-    })
-    .then((data2) => {
-      if (data2) {
-        /*
-        watchedState.rssForm.data.rssUrls = [
-          ...state.rssForm.data.rssUrls,
-          watchedState.rssForm.data.fields.activeUrl,
-        ];
-        */
-        watchedState.rssForm.data.rssUrls.push(watchedState.rssForm.data.fields.activeUrl);
-        watchedState.rssForm.isValid = true;
-        repeat();
-      } else {
-        watchedState.rssForm.isValid = false;
-      }
-    })
-    .catch((error) => {
-      watchedState.rssForm.errors = error;
-      watchedState.rssForm.isValid = false;
-    });
-};
-
 window.addEventListener('online', () => {
   hiddeNetworkError(); // Hide message about network error
 });
 
 window.addEventListener('offline', () => {
   showNetworkError(); // Show message about network error
-});
-
-document.addEventListener('DOMContentLoaded', () => {
-  const { rssForm } = elements;
-  rssForm.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    await handler();
-    repeatCheck();
-  });
 });
 
 elements.posts.addEventListener('click', (event) => {
